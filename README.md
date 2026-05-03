@@ -2,7 +2,7 @@
 - A legitimate copy of Ace Combat: Infinity v2.11
 
 # Getting Started
-1. In Releases, download the program and the .yml patch file.
+1. In Releases, download the .zip file and the .yml patch file.
 2. Place `imported_patch.yml` in your RPCS3/patches folder.
 3. Open RPCS3 and go to Manager -> Game Patches -> ACE COMBAT INFINITY and enable the patch.
 4. Create a custom configuration for the game.
