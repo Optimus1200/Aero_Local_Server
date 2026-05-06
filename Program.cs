@@ -1,4 +1,4 @@
-﻿using System.Text;
+using System.Text;
 using Microsoft.AspNetCore.Http.Extensions;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -7,18 +7,20 @@ namespace LocalServer
 {
     class Program
     {
-        const string LOG_FILEPATH = "ServerEntries.log";
+        // SETTINGS
+
+        static readonly string IP_ADDRESS = "127.0.0.1";
+        static readonly int[] HTTP_PORTS = { 80, 443 };
+        static readonly string LOG_FILEPATH = "Server.log";
+
+        // OTHER
+
         static readonly object _logLock = new();
+
+        // PROGRAM START
 
         static async Task Main(string[] args)
         {
-            // SETTINGS
-
-            const string IP_ADDRESS = "127.0.0.1";
-            int[] HTTP_PORTS = { 80, 443 };
-
-            // PROGRAM START
-
             File.WriteAllText(LOG_FILEPATH, string.Empty);
 
             var builder = WebApplication.CreateBuilder(args);
@@ -29,7 +31,7 @@ namespace LocalServer
             {
                 options.AddServerHeader = false;
 
-                foreach (var port in HTTP_PORTS)
+                foreach (int port in HTTP_PORTS)
                 {
                     options.Listen(System.Net.IPAddress.Parse(IP_ADDRESS), port);
                 }
@@ -50,15 +52,24 @@ namespace LocalServer
             app.MapGet("/{**catchAll}", HandleHttpGetRequest);
             app.MapPost("/{**catchAll}", HandleHttpPostRequest);
 
-            foreach (var port in HTTP_PORTS)
+            foreach (int port in HTTP_PORTS)
             {
                 Log($"[HTTP {IP_ADDRESS}:{port}] Started listening.");
             }
+
             Log("All listeners started.\n");
 
-            await app.RunAsync();
+            try
+            {
+                await app.RunAsync();
+            }
+            catch (Exception e)
+            {
+                Log(e.Message);
+            }
+            
 
-            Console.WriteLine("Server offline. Press any key to exit...");
+            Console.Write("Server offline. Press any key to exit...");
             Console.ReadKey();
         }
 
@@ -84,7 +95,7 @@ namespace LocalServer
                 request.Body.Position = 0;
             }
 
-            // build header block similear to original http log
+            // build header block similar to original http log
             var sb = new StringBuilder();
             sb.Append($"[{local}:{localPort}] Received:\n\n");
             sb.Append($"{request.Method} {request.GetEncodedPathAndQuery()} {request.Protocol}\n");
