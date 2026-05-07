@@ -1,9 +1,11 @@
 # Requirements
-- RPCS3 emulator
-- A legitimate copy of Ace Combat: Infinity v2.11
-- .NET 8.0 installed on your computer
+- [ASP.NET Core Runtime 8.0](https://dotnet.microsoft.com/en-us/download/dotnet/8.0)
+- [RPCS3](https://rpcs3.net/)
+- [PS3 Firmware](https://www.playstation.com/en-us/support/hardware/ps3/system-software/)
+- A legitimate copy of Ace Combat: Infinity v2.11 along with its license file
 
 # Getting Started
+0. Set up RPCS3: https://rpcs3.net/quickstart
 1. In Releases, download the LocalServer_*.zip file for your OS and the .yml patch file.
 2. Place `imported_patch.yml` in your RPCS3/patches folder.
 3. If you haven't, create an RPCN account and sign in to RPCN.
