@@ -26,7 +26,7 @@
 
 # Legal Disclaimer
 
-**OPERATION ETERNAL LIBERATION** is an independent, community-driven revival project and is **not** affiliated with, endorsed by, or otherwise connected to Bandai Namco Entertainment Inc. or any of the original rights holders of *Ace Combat Infinity*.
+This project is an independent, community-driven revival project and is **not** affiliated with, endorsed by, or otherwise connected to Bandai Namco Entertainment Inc. or any of the original rights holders of *Ace Combat Infinity*.
 
 This project is developed strictly for **non-commercial, hobby, and preservation purposes**. It is, and will always remain, **freely available** via its official GitHub repository. Any distribution of this content in exchange for payment or other compensation is entirely unauthorized and is not endorsed by the -OPERATIONS- team. If you encounter such activity, we strongly encourage you to report it.
 
