@@ -1,6 +1,10 @@
 # About
 
-This is a mock server that aims to replicate the functionality of the Wind API to make the game work. Included in the Release is a custom build of RPCS3 by Killer0byte that allows the game to properly read .tss files.
+This is a mock server that aims to replicate the functionality of the Wind API to make the game work. Included in the Release is a custom build of RPCS3 by Killer0byte that allows the game to properly read .tss files., as well as a built-in patch to unlock all DLC and infinite fuel.
+
+# Cheat Engine
+
+Right now, this server does not implement save-data backup, so you should not be using Cheat Engine with this server, as you risk corrupting save data that is stored on the RPCN server, which will be very annoying to restore.
 
 # Supported Platforms
 - Windows
