@@ -55,7 +55,7 @@ sudo dotnet run
 
 # Credits
 
-Many thanks to Killer0byte for providing the custom RPCS3 build and JumpSuit for contributing to the development of the server.
+Many thanks to Killer0byte for providing the custom RPCS3 build, and many thanks to and JumpSuit and Volcano Water for contributing to the development of the server.
 
 # Legal Disclaimer
 
