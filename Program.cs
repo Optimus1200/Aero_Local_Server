@@ -1,9 +1,13 @@
 using DNS.Server;
 using Microsoft.AspNetCore.Http.Extensions;
+using Microsoft.AspNetCore.Server.Kestrel.Core;
+using Microsoft.AspNetCore.Server.Kestrel.Https;
 using System.Net;
+using System.Security.Authentication;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
-
 using static AeroServer.Utility;
 
 namespace AeroServer
@@ -12,7 +16,7 @@ namespace AeroServer
     {
         // SETTINGS
 
-        static readonly double VERSION = 1.0;
+        static readonly double VERSION = 1.1;
 
         static string OS = GetOSString();
 
@@ -20,32 +24,43 @@ namespace AeroServer
 
         static readonly int DNS_PORT = 53;
 
-        //static readonly int[] FORWARDED_TCP_PORTS = { 3478, 3479, 3480, 5223 };
-
-        //static readonly int[] FORWARDED_UDP_PORTS = { 3074, 3478, 3479 }; // avoid using 3658 for rpcn, use for psn
-
         static readonly string UNHANDLED_ROUTES_FILEPATH = "UnhandledRoutes.log";
 
         static readonly string ARROWS_FILEPATH = "arrows.txt";
 
-        static readonly string TSS_FOLDER = "tss/";
+        static readonly string TSS_DIR = "tss/np/NPWR04428_00";
+
+        static readonly string HASH_DIR = "hash";
 
         static JsonSerializerOptions jsonOptions = new() { WriteIndented = true };
 
         static readonly string SERVER_ADDRESS = GetLocalServerIp();
 
         static readonly string[] DNS_DOMAINS = {
-            //"dev-wind.siliconstudio.co.jp",
-            //"aci.vs765.nbgi-amnet.jp",
+            "dev-wind.siliconstudio.co.jp",
+            "aci.vs765.nbgi-amnet.jp",
             //"projectaces-newtitle.bngames.net",
             //"acecombat.jp",
-            //"gs-sec.ww.np.dl.playstation.net"//,
-            //"a0.ww.np.dl.playstation.net"
+            //"gs-sec.ww.np.dl.playstation.net",
+            "a0.ww.np.dl.playstation.net" // where tss files are requested
         };
 
-        static WebApplication server = BuildServer();
+        static readonly string PSN_DOMAIN = "a0.ww.np.dl.playstation.net";
 
-        static DnsServer dnsServer = BuildDnsServer();
+        static WebApplication server;
+
+        static DnsServer dnsServer;
+
+        // FOR PS3: ENABLE
+        // FOR RPCS3: DISABLE
+        static readonly bool ENABLE_DNS = false;
+
+        // right now used for requesting to download tss files,
+        // the hashed versions are stored in hash folder and will be compared for security
+        static readonly HttpClient httpClient = new(new HttpClientHandler
+        {
+            ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator,
+        });
 
         // PROGRAM START
 
@@ -53,19 +68,33 @@ namespace AeroServer
         {
             File.WriteAllText(LOG_FILEPATH, string.Empty);
             File.WriteAllText(UNHANDLED_ROUTES_FILEPATH, string.Empty);
-
+        
+            server = BuildServer();
+        
+            if (ENABLE_DNS)
+            {
+                dnsServer = BuildDnsServer();
+            }
+        
             MapRoutes();
-
-            PrintServerHeader();
-
+        
+            PrintServerLogo();
+        
             Log($"AeroServer {VERSION:F1} - {OS}");
-
-            await CheckTssFiles();
-
-            await RunServer();
-
-            Console.Write("All listeners stopped. Server offline. Press any key to exit...");
-            Console.ReadKey();
+        
+            bool tssStatus = await CheckTssFilesAsync();
+            if (!tssStatus)
+            {
+                Console.Write("All listeners stopped. Server offline. Press any key to exit...");
+                Console.ReadKey();
+            }
+            else
+            {
+                await RunServer();
+        
+                Console.Write("All listeners stopped. Server offline. Press any key to exit...");
+                Console.ReadKey();
+            }
         }
 
         static string GetOSString()
@@ -94,7 +123,14 @@ namespace AeroServer
 
                 foreach (int port in TCP_PORTS)
                 {
-                    options.Listen(IPAddress.Any, port);
+                    if (port == 443 && ENABLE_DNS)
+                    {
+                        options.Listen(IPAddress.Any, port, listenOptions => listenOptions.UseHttps());
+                    }
+                    else
+                    {
+                        options.Listen(IPAddress.Any, port);
+                    }      
                 }
             });
 
@@ -114,74 +150,116 @@ namespace AeroServer
                 await next();
             });
 
-            // serve our own TSS files for this game
-            for (int i = 0; i < 15; i++)
+            // 1. handle host/domain
+            // 2. handle request
+            server.MapFallback("/{**catchAll}", async (context) =>
             {
-                server.MapGet($"/tss/np/NPWR04428_00/NPWR04428_00-{i}.tss", context => ServeFileAsync(context)); // what PS3 requests
-                server.MapGet($"/tss/sp-int/NPWR04428_00/NPWR04428_00-{i}.tss", context => ServeFileAsync(context)); // what RPCS3 requests
-            }
+                string host = context.Request.Host.Value;
 
-            server.MapGet("/project_eula_en/{**rest}", context => ServeFileAsync(context));
-            server.MapGet("/project_events_eula/{**rest}", context => ServeFileAsync(context));
+                if (context.Request.Host.Value.Contains(PSN_DOMAIN))
+                {
+                    if (context.Request.Path.Value != null &&
+                        context.Request.Path.Value.EndsWith(".tss", StringComparison.OrdinalIgnoreCase))
+                    {
+                        await ServeFileAsync(context);
+                    }
+                    else
+                    {
+                        // TODO: implement psn proxy
+                        // 1. forward request to psn domain
+                        // 2. receive response from psn domain
+                        // 3. return response back to ps3
+                    }
+                }
+                else
+                {
+                    string pathBase = context.Request.Path.Value ?? string.Empty;
+                    if (pathBase != string.Empty)
+                    {
+                        pathBase = pathBase.Substring(0, pathBase.IndexOf('/', 1));
+                    }     
 
-            server.MapPost("/Wind/{**rest}", context => PostWindAsync(context));
+                    switch (pathBase)
+                    {
+                        case "/Wind":
+                            await PostWindAsync(context);
+                            break;
 
-            // proxy all other a0.ww.np.dl.playstation.net traffic back to real PSN
-            //server.MapGet("/tss/{**rest}", context => ProxyToPsnAsync(context));
+                        case "/tss":
+                        case "/project_eula_en":
+                        case "/project_events_eula":
+                            await ServeFileAsync(context);
+                            break;
 
-            server.MapGet("/{**catchAll}", context => UnhandledRouteAsync(context));
-            server.MapPost("/{**catchAll}", context => UnhandledRouteAsync(context));
-            server.MapPut("/{**catchAll}", context => UnhandledRouteAsync(context));
-            server.MapPatch("/{**catchAll}", context => UnhandledRouteAsync(context));
-            server.MapDelete("/{**catchAll}", context => UnhandledRouteAsync(context));
+                        default:
+                            await UnhandledRouteAsync(context);
+                            break;
+                    }
+                }
+            });
+
+            // serve our own TSS files for game
+            //server.MapGet("/tss/{**catchAll}", context => ServeFileAsync(context));
+
+            //server.MapGet("/project_eula_en/{**rest}", context => ServeFileAsync(context));
+            //server.MapGet("/project_events_eula/{**rest}", context => ServeFileAsync(context));
+
+            //server.MapPost("/Wind/{**rest}", context => PostWindAsync(context));
+
+            //server.MapFallback("/{**catchAll}", context => UnhandledRouteAsync(context));
+
+            //server.MapGet("/{**catchAll}", context => UnhandledRouteAsync(context));
+            //server.MapPost("/{**catchAll}", context => UnhandledRouteAsync(context));
+            //server.MapPut("/{**catchAll}", context => UnhandledRouteAsync(context));
+            //server.MapPatch("/{**catchAll}", context => UnhandledRouteAsync(context));
+            //server.MapDelete("/{**catchAll}", context => UnhandledRouteAsync(context));
+
+
+            //server.MapGet("/{**catchAll}", context => ProxyUnhandledAsync(context));
+            //server.MapPost("/{**catchAll}", context => ProxyUnhandledAsync(context));
+            //server.MapPut("/{**catchAll}", context => ProxyUnhandledAsync(context));
+            //server.MapPatch("/{**catchAll}", context => ProxyUnhandledAsync(context));
+            //server.MapDelete("/{**catchAll}", context => ProxyUnhandledAsync(context));
         }
 
-        static async Task CheckTssFiles()
+        static async Task<bool> CheckTssFilesAsync()
         {
-            if (!Directory.Exists(TSS_FOLDER))
+            if (!Directory.Exists(TSS_DIR))
             {
-                Directory.CreateDirectory(TSS_FOLDER);
+                Directory.CreateDirectory(TSS_DIR);
             }
 
-            string tssRelativeDirPSN = "tss/np/NPWR04428_00/";
-            string tssRelativeDirRPCN = "tss/sp-int/NPWR04428_00/";
+            bool areFilesGood = true;
 
-            if (!Directory.Exists(tssRelativeDirRPCN))
-            {
-                Directory.CreateDirectory(tssRelativeDirRPCN);
-            }
-
-            HttpClient httpClient = new(new HttpClientHandler
-            {
-                ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
-            });
+            await LogAsync(string.Empty);
 
             for (int i = 0; i < 15; ++i)
             {
-                string tssFile = $"NPWR04428_00-{i}.tss";
-                string tssRelativeFilepathPSN = tssRelativeDirPSN + tssFile;
-                string tssRelativeFilepathRPCN = tssRelativeDirRPCN + tssFile;
+                string tssFilepath = TSS_DIR + "/" + $"NPWR04428_00-{i}.tss";
 
-                if (!File.Exists(tssRelativeFilepathPSN))
+                if (!File.Exists(tssFilepath))
                 {
-                    await LogAsync($"File not found: \"{tssRelativeFilepathPSN}\", requesting now...", ConsoleColor.Yellow);
+                    await LogAsync($"File not found: \"{tssFilepath}\", requesting now...", ConsoleColor.Yellow);
 
                     await RequestFileAsync(
                         httpClient,
-                        //$"https://a0.ww.np.dl.playstation.net/{tssRelativeFilepathPSN}", // source
-                        $"http://api.psorg-web-revival.us/{tssRelativeFilepathPSN}", // source
-                        tssRelativeFilepathPSN); // dst
+                        //$"https://a0.ww.np.dl.playstation.net/{tssFilepath}", // source
+                        $"http://api.psorg-web-revival.us/{tssFilepath}", // source
+                        tssFilepath); // dst
+                }
 
-                    if (!File.Exists(tssRelativeFilepathRPCN))
-                    {
-                        await LogAsync($"File not found: \"{tssRelativeFilepathRPCN}\", copying...", ConsoleColor.Yellow);
-
-                        File.Copy(tssRelativeFilepathPSN, tssRelativeFilepathRPCN);
-
-                        await LogAsync($"File copied to \"{tssRelativeFilepathRPCN}\"", ConsoleColor.Green);
-                    }
+                if (!VerifyFileHash(tssFilepath))
+                {
+                    await LogAsync($"[ERROR] FILE DOES NOT CONTAIN EXPECTED CONTENTS: {tssFilepath}", ConsoleColor.Red);
+                    areFilesGood = false;
+                }
+                else
+                {
+                    await LogAsync($"Successfully validated: {tssFilepath}", ConsoleColor.Green);
                 }
             }
+
+            return areFilesGood;
         }
 
         static async Task<IResult> RequestFileAsync(HttpClient httpClient, string sourcePath, string dstPath)
@@ -226,14 +304,23 @@ namespace AeroServer
                 Log($"[TCP {SERVER_ADDRESS}:{port}] Started listening.");
             }
 
-            //Log($"[DNS {SERVER_ADDRESS}:{DNS_PORT}] Started listening.");
+            if (ENABLE_DNS)
+            {
+                Log($"[DNS {SERVER_ADDRESS}:{DNS_PORT}] Started listening.");
+            }
 
             Log("\nAll listeners started. Server online.\n");
 
             try
             {
-                await server.RunAsync();
-                //await Task.WhenAll( server.RunAsync(), dnsServer.Listen() );
+                if (ENABLE_DNS)
+                {
+                    await Task.WhenAll(server.RunAsync(), dnsServer.Listen(DNS_PORT, IPAddress.Any));
+                }
+                else
+                {
+                    await server.RunAsync();
+                }
             }
             catch (Exception e)
             {
@@ -244,7 +331,7 @@ namespace AeroServer
         }
 
         // TODO - Finish up and implement
-        static async Task SaveDataUpload(HttpContext context)
+        static async Task PostWindSaveDataUploadAsync(HttpContext context)
         {
             string content = string.Empty;
 
@@ -325,6 +412,11 @@ namespace AeroServer
             string? route = context.Request.Path.Value;
             string? filepath = route?.TrimStart('/');
 
+            if (filepath != null && filepath.Contains(".tss"))
+            {
+                filepath = filepath.Replace("sp-int", "np");
+            }
+
             if (!File.Exists(filepath))
             {
                 string response = $"File not found: {filepath}";
@@ -343,6 +435,8 @@ namespace AeroServer
                 context.Response.StatusCode = 403; // forbidden
                 return;
             }
+
+           
 
             byte[] bytes = await File.ReadAllBytesAsync(filepath);
 
@@ -414,6 +508,8 @@ namespace AeroServer
             switch (currentPath)
             {
                 case "accum_data":
+                case "ev_accept_challenge":
+                case "ev_challenge_reward":
                 case "ev_death":
                 case "ev_dev_aircraft":
                 case "ev_entitlement_query":
@@ -435,10 +531,9 @@ namespace AeroServer
                     await StubResponseAsync(context);
                     break;
 
-                /*
                  case "ev_save_data_upload":
-                    SaveDataUpload(context);
-                 */
+                    await PostWindSaveDataUploadAsync(context);
+                    break;
 
                 default:
                     await UnhandledRouteAsync(context);
@@ -673,9 +768,7 @@ namespace AeroServer
             await LogAsync(response);
         }
 
-
-
-        static void PrintServerHeader()
+        static void PrintServerLogo()
         {
             if (OperatingSystem.IsWindows())
             {
@@ -724,23 +817,112 @@ namespace AeroServer
         {
             var masterFile = new MasterFile();
 
-            // route domain to our server local IP address
-
+            // resolve these domains to localhost
             foreach (string domain in DNS_DOMAINS)
             {
                 masterFile.AddIPAddressResourceRecord(domain, SERVER_ADDRESS);
             }
 
-            // proxy off Google's DNS (8.8.8.8) for things we don't care about mapping
-            // so standard traffic (like PSN logins if they still ping out) won't break
-            var dnsServer = new DnsServer(
-                new WildcardResolver(SERVER_ADDRESS, masterFile),
-                "8.8.8.8"
-            );
+            var dnsServer = new DnsServer(masterFile, "8.8.8.8");
+
+            //dnsServer.Requested += (sender, e) =>
+            //{
+            //    string cleanReq = PrettyPrintDns(e.Request.ToString() ?? string.Empty);
+            //    Log($"[DNS REQUEST]\n{cleanReq}");
+            //};
+            //
+            //dnsServer.Responded += (sender, e) =>
+            //{
+            //    string cleanRes = PrettyPrintDns(e.Response.ToString() ?? string.Empty);
+            //    Log($"[DNS RESPONSE]\n{cleanRes}");
+            //};
+
+            dnsServer.Errored += (sender, e) => Log($"[DNS ERROR] {e.Exception.Message}", ConsoleColor.Red);
 
             return dnsServer;
         }
 
+        static async Task ProxyUnhandledAsync(HttpContext context)
+        {
+            // If the requested path ends in .tss, serve it from local files directly
+            if (context.Request.Path.Value != null && 
+                context.Request.Path.Value.EndsWith(".tss", StringComparison.OrdinalIgnoreCase))
+            {
+                await ServeFileAsync(context);
+                return;
+            }
 
+            // 1. Rebuild the exact destination URL
+            string targetUrl = $"{context.Request.Scheme}://{context.Request.Host}{context.Request.Path}{context.Request.QueryString}";
+
+            // 2. Create the outbound request with matching Method and URL
+            using var request = new HttpRequestMessage(new HttpMethod(context.Request.Method), targetUrl);
+
+            // 3. Copy incoming Request Body and Request Headers as-is
+            request.Content = new StreamContent(context.Request.Body);
+            foreach (var h in context.Request.Headers)
+            {
+                if (!request.Headers.TryAddWithoutValidation(h.Key, h.Value.ToArray()))
+                    request.Content.Headers.TryAddWithoutValidation(h.Key, h.Value.ToArray());
+            }
+
+            // 4. Send request and get response headers from destination
+            using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
+
+            // 5. Copy Response Status and Response Headers back to source as-is
+            context.Response.StatusCode = (int)response.StatusCode;
+            foreach (var h in response.Headers)
+                context.Response.Headers[h.Key] = h.Value.ToArray();
+            foreach (var h in response.Content.Headers)
+                context.Response.Headers[h.Key] = h.Value.ToArray();
+
+            context.Response.Headers.Remove("transfer-encoding"); // Let Kestrel manage chunking automatically
+
+            // 6. Stream the Response Body back to the source as-is
+            await response.Content.CopyToAsync(context.Response.Body);
+        }
+
+        static string PrettyPrintDns(string dnsLogString)
+        {
+            if (string.IsNullOrWhiteSpace(dnsLogString))
+                return string.Empty;
+
+            var sb = new StringBuilder();
+
+            // Basic formatting to break apart the complex string
+            string formatted = dnsLogString
+                .Replace("{Header=", "{\n  Header = ")
+                .Replace("}, ", "\n  },\n  ")
+                .Replace(", ", ",\n    ")
+                .Replace("=[{", " = [\n    {\n      ")
+                .Replace("]}]", "\n    }\n  ]")
+                .Replace("]", "\n  ]");
+
+            return formatted + "\n";
+        }
+
+        static bool VerifyFileHash(string filePath)
+        {
+            using var sha256 = SHA256.Create();
+            using var stream = File.OpenRead(filePath);
+            byte[] hashBytes = sha256.ComputeHash(stream);
+
+            byte[] expectedHashBytes = File.ReadAllBytes(HASH_DIR + "/" + filePath.Replace(".tss", ".txt"));
+
+            if (hashBytes.Length != expectedHashBytes.Length)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < hashBytes.Length; i++)
+            {
+                if (hashBytes[i] != expectedHashBytes[i])
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
     }
 }
